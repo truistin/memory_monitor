@@ -143,6 +143,28 @@ class _Signals:
             self.deadline = None
 
 
+def _print_system_memory() -> None:
+    """Append host memory counters without making reporting depend on free."""
+    try:
+        result = subprocess.run(
+            ["free", "-g"], stdin=subprocess.DEVNULL, capture_output=True,
+            text=True, errors="replace", timeout=2.0,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        _log(f"[memory] warning: free -g unavailable: {error}", error=True)
+        return
+    if result.returncode != 0:
+        detail = result.stderr.strip() or "no error output"
+        _log(f"[memory] warning: free -g exited with {result.returncode}: {detail}", error=True)
+        return
+    if not result.stdout.strip():
+        _log("[memory] warning: free -g returned no output", error=True)
+        return
+    _log("[memory] free -g (system memory):")
+    for line in result.stdout.splitlines():
+        _log(line)
+
+
 def _print_summary(result: dict) -> None:
     peaks = result["peaks"]
     tree = peaks.get("tree_rss")
@@ -153,6 +175,7 @@ def _print_summary(result: dict) -> None:
     _log(f"[memory] current_tree_rss={current_text} sampled_peak_tree_rss={peak} "
          f"processes={latest.get('process_count', 0)} samples={result['sample_count']} "
          f"stage={latest.get('stage', 'unattributed')}")
+    _print_system_memory()
 
 
 def _monitor(args, source, recorder, metadata, process, signals, stage_reader, cgroup) -> int:

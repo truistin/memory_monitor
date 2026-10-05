@@ -55,6 +55,18 @@ nohup python memory_monitor/run_monitor.py attach \
 
 控制台输出和重定向后的 `memory-d01.log` 使用相同格式，无需额外配置。`samples.jsonl` 每条记录已有相同格式的 `timestamp` 字段，表示采样开始时间；日志前缀表示该条消息输出时的时间。`command.log` 原样保存目标程序输出，其时间戳由目标程序提供。
 
+每次打印内存摘要后（包括启动后的首次报告和结束报告），还会立即执行本机 `free -g`，输出整机内存和 Swap 表格，每行同样附带时间戳。默认随 `--report-interval` 每 30 秒执行一次，无需额外开关；不会在每秒采样或每条普通提示后执行。示例数值仅用于展示格式：
+
+```text
+[2026-10-05T15:11:06.819+00:00] [memory] current_tree_rss=67.126 GiB sampled_peak_tree_rss=1104.478 GiB processes=34 samples=7291 stage=[select] fold_0006 (6/9) generating historical features
+[2026-10-05T15:11:06.825+00:00] [memory] free -g (system memory):
+[2026-10-05T15:11:06.825+00:00]                total        used        free      shared  buff/cache   available
+[2026-10-05T15:11:06.825+00:00] Mem:             251          62          40           0         149         189
+[2026-10-05T15:11:06.825+00:00] Swap:              0           0           0
+```
+
+表格保留 `free -g` 实际输出的列和值，仅增加日志时间前缀；它反映整台机器，包含其他任务和系统缓存，不能当成当前任务独占用量。命令不存在（例如 macOS 默认环境）、执行失败或超过 2 秒未返回时，打印告警并继续监控，不影响业务命令的执行和退出码。该表格只写入控制台/重定向日志，JSON 采样与摘要格式保持原样。
+
 `summary.json` 中重点看：
 
 - `peaks.tree_rss.value_bytes`：同一次采样中，主进程和已发现后代的 RSS 合计之最大值。不是各进程自身历史峰值的相加。
