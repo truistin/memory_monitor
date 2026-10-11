@@ -11,7 +11,7 @@ nohup python memory_monitor/run_monitor.py run \
   --output memory_monitor/runs \
   --interval 1 \
   --report-interval 30 \
-  -- python -u faw/run_faw.py run --config faw/configs/d01.toml \
+  -- python -u faw/run_faw.py run --config faw/configs/d01.toml --neutralize csi300\
   > memory-d01.log 2>&1 &
 ```
 
@@ -80,7 +80,9 @@ nohup python memory_monitor/run_monitor.py attach \
 
 RSS 包含共享页。FAW 的 fork worker 可共享大量行情数据，因此 **RSS 相加会重复计算共享内存，不能直接与机器的 256 GiB 对比来判断 OOM**。每秒采样也可能遗漏瞬时尖峰、短命 worker，读取进程树并非原子快照。Linux `/proc` RSS 本身也是内核近似计数。
 
-默认从已有 FAW 日志识别顶层阶段、部分 fold/scope 开始标记。只消费开始标记，不把结束时的耗时打印当成开始。阶段归属是“采样时最近识别到的日志标记”，受日志缓冲和读取滞后影响；没有开始标记的细分步骤会合并，不能视为精确的逐函数内存归因。
+默认从已有 FAW 日志识别顶层阶段、部分 fold/scope 开始标记、暴露准备、中性化及 panel 特征计算。`[generate] computing N panel features`、`panel plan`、`panel progress` 和 panel 子阶段开始日志都更新为固定的 `[generate] computing panel features`，任务数或耗时变化不会创建更多阶段桶。裸的 `[select] causal replay cutoff=YYYY-MM-DD` 也会更新为回放特征生成，避免一直显示此前的“preparing historical data”。结束时的耗时打印不作为新阶段。
+
+阶段归属是“采样时最近识别到的日志标记”，受日志缓冲和读取滞后影响；没有开始标记的细分步骤会合并，不能视为精确的逐函数内存归因。不同折的 panel 计算会进入同一个固定标签桶，需结合业务日志时间戳确定当时的 fold。
 
 同时支持旧日志和带 `[2026-10-05T15:04:05+08:00]` 时间前缀的新日志；时间不计入阶段名称。自定义 `--stage-regex` 仍匹配原始整行，包括时间前缀。
 

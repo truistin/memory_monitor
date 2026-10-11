@@ -164,6 +164,13 @@ _SELECT_START = re.compile(
     r"|causal replay cutoff=\d{4}-\d{2}-\d{2}): (?P<action>.+)$"
 )
 _SELECT_GENERATE = re.compile(r"^\[select\] fold_\d+ \(\d+/\d+\) generating historical features$")
+_REPLAY_GENERATE = re.compile(r"^\[select\] causal replay cutoff=\d{4}-\d{2}-\d{2}$")
+_PANEL_ACTIVITY = re.compile(
+    r"^\[generate\] (?:computing \d+ panel features|panel (?:plan|progress)(?: .*)?)$"
+)
+_PANEL_TIMING_START = re.compile(r"^\[timing\] generate panel .+ start$")
+_EXPOSURE_START = re.compile(r"^\[generate\] resolving (?:csi300|csi1000) exposures$")
+_NEUTRALIZATION_START = re.compile(r"^\[generate\] neutralizing [\d,]+ rows x \d+ features$")
 _MEMBER_ACTION = re.compile(r"^(?:training Rank IC \(\d+ members\)|reading and comparing \d+ members)$")
 _LOG_TIMESTAMP = re.compile(
     r"^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[+-]\d{2}:\d{2}|Z)\] "
@@ -177,8 +184,9 @@ class LogStageReader:
     A log backlog can therefore delay attribution. ``start_from_tail`` starts
     the first successfully opened file at its last bounded chunk; use it when
     attaching to an existing run. Older stage starts may then be unavailable.
-    Complete lines alone are parsed; completion/progress lines never replace a
-    stage by default. Later log rotations are always read from their beginning.
+    Complete lines alone are parsed. Panel progress updates use a fixed label,
+    so task counts never create extra stage buckets. Completion lines do not
+    start stages. Later log rotations are always read from their beginning.
     """
 
     max_read_bytes = 256 * 1024
@@ -222,6 +230,18 @@ class LogStageReader:
         # FAW console timestamps are metadata, not part of a stage identity.
         # Custom patterns above still see the original line for compatibility.
         line = _LOG_TIMESTAMP.sub("", line, count=1)
+        if _PANEL_ACTIVITY.fullmatch(line) or _PANEL_TIMING_START.fullmatch(line):
+            self.stage = "[generate] computing panel features"
+            return
+        if _EXPOSURE_START.fullmatch(line):
+            self.stage = "[generate] resolving exposures"
+            return
+        if _NEUTRALIZATION_START.fullmatch(line):
+            self.stage = "[generate] neutralizing features"
+            return
+        if _REPLAY_GENERATE.fullmatch(line):
+            self.stage = "[select] causal replay feature generation"
+            return
         if line in _TOP_LEVEL_STARTS or line in _SELECT_GLOBAL_STARTS or _SELECT_GENERATE.fullmatch(line):
             self.stage = _stage_label(line)
             return

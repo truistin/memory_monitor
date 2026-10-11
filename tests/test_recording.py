@@ -161,6 +161,38 @@ class LogStageReaderTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             LogStageReader(self.path, max_line_bytes=0)
 
+    def test_panel_and_replay_markers_replace_stale_preparation_stage(self):
+        reader = LogStageReader(self.path)
+        markers = (
+            ("[select] causal replay cutoff=2022-05-17: preparing historical data",
+             "[select] causal replay cutoff=2022-05-17: preparing historical data"),
+            ("[select] causal replay cutoff=2022-05-17",
+             "[select] causal replay feature generation"),
+            ("[generate] resolving csi300 exposures", "[generate] resolving exposures"),
+            ("[generate] computing 8 panel features", "[generate] computing panel features"),
+            ("[generate] panel plan workers=2 tasks=80", "[generate] computing panel features"),
+            ("[timing] generate panel dispatch-and-collection start",
+             "[generate] computing panel features"),
+            ("[generate] panel progress 16/80 tasks", "[generate] computing panel features"),
+            ("[generate] neutralizing 5,604,683 rows x 8 features",
+             "[generate] neutralizing features"),
+        )
+        for prefix in ("", "[2026-10-07T11:36:48+08:00] "):
+            for marker, expected in markers:
+                self.append((prefix + marker + "\n").encode())
+                self.assertEqual(reader.read(), expected)
+
+    def test_panel_progress_keeps_one_stage_bucket_and_completions_are_ignored(self):
+        reader = LogStageReader(self.path)
+        stages = set()
+        for index in range(50):
+            self.append(f"[generate] panel progress {index}/50 tasks elapsed={index}.0s\n".encode())
+            stages.add(reader.read())
+        self.assertEqual(stages, {"[generate] computing panel features"})
+        self.append(b"[generate] raw feature transformation complete in 100.0s\n"
+                    b"[timing] generate panel dispatch-and-collection done wall=100.0s\n")
+        self.assertEqual(reader.read(), "[generate] computing panel features")
+
     def test_timestamped_faw_markers_keep_stable_stage_names(self):
         reader = LogStageReader(self.path)
         markers = (
