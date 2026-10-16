@@ -25,6 +25,78 @@ tail -f memory_monitor/runs/d01-20261005-01/command.log
 
 若需要单独指定业务日志文件，可在 `--` 前增加 `--command-log /path/to/new-faw.log`；这个文件也必须不存在，其父目录需已经存在。工具不提供交互式终端透传，适用于批处理任务。
 
+## 启动并监控 stock RNN 搜索
+
+可以监控 `stock/rnn_deploy` 的主进程及其后代，包括 RNN 和 GP 共用的评分 worker。
+同样可以在 `--` 后替换为 stock 的 data_pipeline、池化或因子导出命令；阶段识别规则需与各自日志匹配。
+监控器统计进程内存，不逐个统计线程，也不采集 CPU 利用率或 GPU 显存；计算耗时与 worker
+缓存命中仍查看 RNN 的 `runtime_progress.json` 和 `*_runtime_profile.json`。
+
+以下示例从 `factor_sys` 根目录执行，沿用 8 个评分进程、每进程 1 个计算线程的搜索配置。
+Linux 上同时启用每 10 秒一次 PSS 采样，便于观察共享 memmap 数据的分摊内存；macOS
+可省略 `--pss-interval 10`。时间后缀用于创建新的监控输出目录：
+
+```bash
+rnn_monitor_id="rnn-search-$(date +%Y%m%d-%H%M%S)"
+nohup python memory_monitor/run_monitor.py run \
+  --output "memory_monitor/runs/$rnn_monitor_id" \
+  --interval 1 \
+  --report-interval 30 \
+  --pss-interval 10 \
+  --stage-regex '^\[rnn\]\s+\{.*"stage":\s*"(?P<stage>[^"]+)".*"event":\s*"(?:start|waiting)"' \
+  -- python -u stock/rnn_deploy/src/rnn_deploy/search.py \
+  --data stock/output/factors-v1 \
+  --preset price \
+  --targets y1 y3 y5 --target-weights 0.2 0.3 0.5 \
+  --neutralize csi300 \
+  --logdir stock/output/factors-v1/logs_factor \
+  --n-samples 100000 --batch-size 5000 \
+  --n-cores 8 --worker-threads 1 \
+  --gp-meld --seed 0 \
+  > "memory-$rnn_monitor_id.log" 2>&1 &
+```
+
+`--neutralize csi300` 对应此前训练日志中的冻结 Beta 基准；实际数据包若绑定中证 1000，
+应改用 `--neutralize csi1000`。并发数按实际资源调整，例如使用此前的 32 个评分进程时改为
+`--n-cores 32`。当前 RNN 的性能诊断和窗口级续跑默认开启，无需额外填写 `--profile --resume`；
+续跑仍只复用代码、配置、输入及结果完整匹配的已完成窗口，未完成窗口整折重跑。
+
+上述自定义正则识别新版 `[rnn]` JSON 日志中的阶段开始及等待心跳，例如 `sampling`、`gp`、
+`gp_evaluation`、`reward`、`policy_update` 和 `save_results`。默认阶段解析器主要识别 FAW
+日志；未加正则或旧版 RNN 尚无这些标记时，内存采样仍可执行，但阶段可能为 `unattributed`。
+该正则按阶段汇总，各窗口的同名阶段会合并，具体窗口及轮数结合业务日志查看。
+
+查看训练日志、监控摘要与内存结果：
+
+```bash
+tail -f "memory_monitor/runs/$rnn_monitor_id/command.log"
+tail -f "memory-$rnn_monitor_id.log"
+cat "memory_monitor/runs/$rnn_monitor_id/summary.json"
+```
+
+前两条命令分别用于持续查看训练日志和监控摘要，按 Ctrl-C 退出查看后再执行下一条。
+这里的变量来自启动命令；另开终端时将变量替换为实际目录名。`samples.jsonl` 记录每次内存采样；
+RSS 合计会重复计算共享页，Linux 上应结合 PSS 的进程覆盖数及整机 `available`/Swap 判断内存压力。
+
+已经运行的 RNN 可使用 attach，无需重启训练。将 `12345` 换为当前 `search.py` 主进程 PID，
+将 `/path/to/existing-rnn.log` 换为该任务正在写入的 stdout/stderr 日志文件：
+
+```bash
+rnn_attach_id="rnn-attach-$(date +%Y%m%d-%H%M%S)"
+nohup python memory_monitor/run_monitor.py attach \
+  --pid 12345 \
+  --output "memory_monitor/runs/$rnn_attach_id" \
+  --interval 1 \
+  --report-interval 30 \
+  --pss-interval 10 \
+  --stage-log /path/to/existing-rnn.log \
+  --stage-regex '^\[rnn\]\s+\{.*"stage":\s*"(?P<stage>[^"]+)".*"event":\s*"(?:start|waiting)"' \
+  > "memory-$rnn_attach_id.log" 2>&1 &
+```
+
+如果没有业务日志，可省略 `--stage-log` 和 `--stage-regex`，仍会采集进程树内存。
+attach 不追溯开始监控前的峰值；停止 attach 监控不会向训练进程发送信号。
+
 ## 附加到已经运行的任务
 
 将 `12345` 替换为当前 FAW **主进程 PID**：
