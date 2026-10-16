@@ -1,5 +1,50 @@
 # memory_monitor
 
+## 串行执行 FAW 配置
+
+`run_faw_queue.py` 是 Linux 常驻队列，无第三方依赖。只启动一次即可：每隔
+60 秒检查当前用户的 FAW 运行进程及对应监控进程，等待它们和已观察到的后代退出，
+再启动下一个配置。它不依赖固定 PID，也不会把无关的 resource_tracker 当成任务。
+
+在服务器的 `factor_sys` 根目录、所需 Python 环境中运行：
+
+```bash
+# 仅预览顺序和命令，不启动任务，也不创建输出目录。
+python memory_monitor/run_faw_queue.py --start d06.toml --dry-run
+
+# 常驻运行；不用再配置每分钟 cron。
+nohup python -u memory_monitor/run_faw_queue.py \
+  --start d06.toml --check-interval 60 > faw-queue.log 2>&1 < /dev/null &
+
+tail -f faw-queue.log
+```
+
+从指定文件开始，按文件名自然顺序执行 `faw/configs/*.toml`；当前从 d06 起共
+21 个配置，包含最后的 l26、t27。配置列表在启动时固定。所有任务使用启动队列的
+同一个 Python 解释器、`--neutralize csi300`、1 秒内存采样和 30 秒摘要间隔。
+
+- 每个配置的监控输出目录为 `memory_monitor/runs/<配置名>`。
+- 监控控制台追加到根目录 `memory-<配置名>.log`，FAW 自身日志在对应输出目录的 `command.log`。
+- 默认记录失败任务的退出码并继续；加 `--stop-on-error` 则遇错停止。最终有失败时队列退出码为 1。
+- 输出目录已存在时停止，防止覆盖旧结果。中断后用 `--start` 指定下一个未完成配置；
+  如果需要重跑失败配置，先归档其已有监控输出。脚本不会自动删除或覆盖它们。
+- 同一 checkout 的队列共用 `memory_monitor/runs/.faw_queue.lock`；重复启动会退出。
+  活动监控进程继承锁，因此队列意外退出后锁仍保护该任务。锁文件不需要手工删除。
+- 不要同时手工启动其他 FAW 任务；手工命令不受队列锁控制。检测范围为当前用户，
+  已观察到的后代会按 PID 和启动时间跟踪；两次检查间产生并完全脱离的后代无法可靠识别。
+- 进程扫描失败时停止队列，不会把读取失败当作机器空闲。停止队列本身不会主动终止当前任务。
+
+针对队列的测试：
+
+```bash
+python -m unittest discover -s memory_monitor/tests -p test_faw_queue.py -v
+```
+
+2026-10-06 本机验证 9 项队列测试通过，包括真实文件锁和子进程锁继承、模拟 Linux
+进程读取、后代重设父进程、PID 复用、串行等待以及无副作用的预览。
+真实 Linux FAW 队列尚需在服务器运行验证。
+
+
 独立的进程树内存监控工具，适用于 FAW、data_prepare、RNN 和其他长时间运行的命令。代码不导入这些项目，也不修改其计算、配置或产物。
 
 需要 **Python 3.10+，Linux 或 macOS**。仅使用标准库，无需安装依赖。Linux 读取 `/proc`；macOS 调用系统 `ps`。以下命令从 `factor_sys` 执行。
